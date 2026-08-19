@@ -1,0 +1,174 @@
+---
+title: "Ep-04"
+author: "Benjamín Hernandez | Marco Ortiz | Benjamín Paredes"
+date: "2026-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+paquetes <- c("boot", "caret", "ggfortify", "ggplot2", 
+  "ggpubr", "grid", "gridExtra", "gmodels", "ez", "emmeans", "infer", 
+  "kableExtra", "Hmisc", "knitr", "leaps", "lmtest", "lsmeans", 
+  "multcomp", "nlme", "plyr", "pROC", "purrr", "pwr", "readr", 
+  "scatterplot3d", "psych", "TeachingDemos", "tibble", "tidyr","nortest", "dplyr", "RVAideMemoire", "rcompanion")
+
+install_if_missing <- function(p) {
+  if (!require(p, character.only = TRUE)) {
+    install.packages(p)
+    library(p, character.only = TRUE)
+  }
+}
+invisible(sapply(paquetes, install_if_missing))
+library(conflicted)
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::pmap())
+
+
+
+```
+
+# Contexto:
+
+### Ya conocemos bien el contraste de hipótesis sobre la media de una población o las diferencia entre las medias de dos poblaciones. Incluso tenemos herramientas para buscar un nivel de significación (α) y un poder estadístico (1 - β) específicos para estas pruebas.
+
+### Además vimos el contraste de hipótesis para determinar el valor de la proporción de elementos que cumplen una cierta característica en una población, o la diferencia de las proporciones de dos poblaciones. Aquí también vimos herramientas para buscar un nivel de significación o un nivel de poder estadístico para estas pruebas.
+
+### Ahora debemos practicar métodos que nos ayuden a contrastar hipótesis, más débiles que en las pruebas anteriores, cuando las condiciones para aplicar con validez las pruebas estudiadas hasta ahora no se cumplen del todo. Partiremos con las proporciones.
+
+
+
+# Equipo 1:
+
+### Considere un nivel de significación α=0,05 para el análisis de las siguientes preguntas. Además, de necesitarse un análisis post-hoc, utilice la corrección de Holm.
+```{r}
+# Datos globales
+alfa <- 0.05
+```
+
+### 1.- Una agencia de marketing desea determinar si hay una diferencia significativa en la efectividad de tres estrategias publicitarias utilizadas para promocionar un nuevo producto. Para ello, se ha recopilado información de personas que fueron expuestas a las tres estrategias publicitarias, registrando si mostraron una aceptación (A) o rechazo (R) a cada una de ellas. ¿Qué puede concluir la agencia de marketing sobre la efectividad de las estrategias publicitarias para promover el nuevo producto? Indicación: obtenga la muestra de 50 personas a partir del archivo “EP04 Datos.csv” que se encuentra en el directorio compartido, usando la semilla 112.
+¿Qué debemos determinar o resolver?
+Debemos determinar si existe diferencia en la proporción de aceptación entre las tres estrategias evaluadas en un mismo grupo de personas. Corresponde a la prueba Q de Cochran.
+```{r}
+# Se carga el data-set
+datos_csv <- read.csv("EP04 Datos.csv", sep = ";")
+# Se fije la semilla para mostrar los resultados aletorios 
+set.seed(112)
+datos_muestra <- datos_csv[sample(nrow(datos_csv), 50), ]
+
+
+# Convertir el formato ancho a largo para la función cochran.qtest
+datos_largos <- datos_muestra |>
+  pivot_longer(cols = c("estrategia_1", "estrategia_2", "estrategia_3"),
+               names_to = "Estrategia",
+               values_to = "Respuesta") |>
+  mutate(id = as.factor(id), Estrategia = as.factor(Estrategia),
+         # Convertimos A y R a 1 y 0 para la prueba
+         Exito = ifelse(Respuesta == "A", 1, 0))
+
+# Prueba Ómnibus: Q de Cochran
+prueba_qc <- cochran.qtest(Exito ~ Estrategia | id, data = datos_largos, alpha = alfa)
+prueba_qc
+
+# Procedimiento post-hoc si hay diferencias (corrección de Holm)
+if (prueba_qc$p.value < alfa) {
+  # McNemar con corrección de Holm
+  post_hoc <- rcompanion::pairwiseMcnemar(Exito ~ Estrategia | id,
+                              data = datos_largos,
+                              test = "mcnemar", correct = FALSE, method = "holm")
+  post_hoc
+}
+```
+##### Respuesta:
+Se rechaza la hipotesis nula en favor de la hipotesis alternatica, ya que pValue = 0.0001138. Existe evidencia suficiente para concluir que hay una diferencia significativa en la efectividad de las tres estrategias.
+Al realizar el análisis post-hoc de McNemar con correccion de holm, se determino que la estrategia 2 tiene una aceptación significativamente mayor (70%) en comparacion con la estrategia 1 y la estrategia 3. Y ente la estrategia 1 y 3, no se encontro diferencias significativas. Por lo tanto la agencia de marketing debe priorizar la estrategia 2
+
+
+### 2.- Una organización de conservación de la fauna silvestre estudia manadas de tres tipos de animales herbívoros en reservas naturales africanas. Se seleccionó aleatoriamente una muestra de 30 observaciones de los animales que se acercaron a beber agua en el principal afluente de las reservas Etosha y Mahago durante tres días consecutivos del mes de febrero. Se registraron 4 elefantes, 21 antílopes y 5 cebras en la primera, y 14 elefantes, 7 antílopes y 9 cebras en la segunda. ¿Existe evidencia de que la proporción de especies es la misma en ambas reservas?
+¿Qué debemos determinar o resolver?  
+Determinar si dos poblaciones (reservas Etosha y Mahago) tienen una distribución homogénea en los niveles de una variable (las 3 especies). Esto corresponde a Chi-cuadrado de homogeneidad.
+
+```{r}
+# Crear la matriz de frecuencias
+etosha <- c(4, 21, 5)
+mahago <- c(14, 7, 9)
+tabla_animales <- as.table(rbind(etosha, mahago))
+dimnames(tabla_animales) <- list(Reserva = c("Etosha", "Mahago"), 
+                                 Especie = c("Elefantes", "Antílopes", "Cebras"))
+
+tabla_animales
+
+# Realizar prueba Chi-cuadrado
+prueba_chi <- chisq.test(tabla_animales)
+# Frecuencias esperadas
+prueba_chi$expected
+
+# Prueba Chi-cuadrado con los resultados reales
+prueba_chi
+```
+##### Respuesta:  
+Se rechaza la hipótesis nula. Existe evidencia estadística suficiente para afirmar que la proporción de especies que se acercan a beber agua no es la misma en ambas reservas.
+
+### 3.- Una organización dedicada a la rehabilitación de villanos ha observado que muchos de ellos ingresan al programa con niveles elevados de hostilidad. Para abordar este problema, decidieron implementar un nuevo programa de bienvenida diseñado para reducir la hostilidad y facilitar la reintegración a la sociedad. Para evaluar la efectividad de este programa, se reclutó a un grupo de 20 villanos a quienes se les midió el nivel de hostilidad (alto o bajo) antes y después de participar en el programa de bienvenida. Los resultados se presentan a continuación: 
+#### 2 villanos no mostraron hostilidad ni antes ni después.  
+#### 15 villanos que inicialmente mostraban hostilidad dejaron de hacerlo.
+#### 2 villanos mantuvieron un elevado nivel de hostilidad.
+#### el otro villano desarrolló síntomas de hostilidad tras participar en el programa cuando antes no era hostil. ¿Qué se puede concluir acerca de la efectividad del nuevo programa de bienvenida para reducir la hostilidad en los villanos?
+¿Qué debemos determinar o resolver?
+Se nos pide evaluar el cambio en una variable dicotómica (hostilidad alta/baja) medida en dos momentos distintos (antes y después) sobre los mismos sujetos (muestras pareadas). Esto corresponde a la prueba de McNemar.
+
+```{r}
+
+# Mantuvieron elevado nivel
+alta_antes_alta_despues <- 2
+
+# Dejaron de mostrar hostilidad 
+alta_antes_baja_despues <- 15
+
+# Desarrolló síntomas
+baja_antes_alta_despues <- 1   
+
+# No mostraron hostilidad ni antes ni después
+baja_antes_baja_despues <- 2  
+
+# Las filas representarán el Antes y las columnas el Después
+tabla_villanos <- matrix(c(alta_antes_alta_despues, alta_antes_baja_despues, 
+                           baja_antes_alta_despues, baja_antes_baja_despues), 
+                         nrow = 2, byrow = TRUE)
+
+# Asignamos los nombres a las dimensiones para mayor claridad
+dimnames(tabla_villanos) <- list(Antes = c("Alta", "Baja"), 
+                                 Despues = c("Alta", "Baja"))
+tabla_villanos
+
+# Usamos la versión sin corrección de continuidad
+prueba_mcnemar <- mcnemar.test(tabla_villanos, correct = FALSE)
+prueba_mcnemar
+
+
+```
+##### Respuesta:  
+
+Se rechaza la hipótesis nula, Existe evidencia estadistica suficiente para afirmar que hubo un cambio significatio en los niveles de hostilidad de los villanos. Al análizar las frecuencias, se observa que la gran mayoria que cambiaron su comportamiento lo hicieron de manera positiva. Por lo tanto, se puede concluir que el programa es efectivo para reducir la hostilidad y facilitar la reintegreación
+
+### 4.- Durante un apocalipsis zombie, un grupo de 10 mujeres y 14 hombres sobrevivientes se encuentra buscando desesperadamente refugio y encuentran dos edificios abandonados que podrían servir: una escuela y un centro comercial. Algunas personas piensan que la escuela es más segura, mientras que otras consideran que el centro comercial es más seguro. Después de elegir sus opciones, se observa que 6 mujeres y 10 hombres eligen refugiarse en la escuela abandonada mientras que los otros optan por el centro comercial. ¿Hay relación entre el sexo de la persona y el edificio abandonado que encuentra más seguro?
+¿Qué debemos determinar o resolver?
+Debemos determinar si existe relación de independencia entre dos variables categóricas: Sexo de la persona y edificio preferido. Como la muestra es pequeña y algunos valores esperados podrían ser inferiores a 5 esto es incoherente con la prueba Chi-cuadrado, así que aplicaremos la prueba exacta de Fisher.
+
+```{r}
+
+# Matriz de frecuencias (Escuela / Mall)
+mujeres <- c(6, 4)
+hombres <- c(10, 4)
+tabla_refugio <- rbind(mujeres, hombres)
+
+# Aplicamos la prueba exacta de Fisher
+prueba_fisher <- fisher.test(tabla_refugio)
+prueba_fisher
+
+```
+##### Respuesta:  
+
+No existe evidencia estadística suficiente para rechazar la hipotesis nula Pvalue < 0.05. Por lo tanto, se concluye que no hay asociación significativa entre el sexo de los sobrevivientes y su preferencia por refugiarse en la escuela o en el centro comercial. La eleccion de donde consideran mas seguro es independiente del sexo de la persona. 

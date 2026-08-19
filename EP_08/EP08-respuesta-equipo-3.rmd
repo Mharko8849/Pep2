@@ -1,0 +1,267 @@
+---
+title: "Ep-08"
+author: "Equipo 3"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+# knitr::opts_chunk$set(echo = TRUE)
+paquetes <- c("boot", "car", "caret", "ggfortify", "ggplot2", 
+  "ggpubr", "grid", "gridExtra", "gmodels", "ez", "emmeans", "infer", 
+  "kableExtra", "Hmisc", "knitr", "leaps", "lmtest", "lsmeans", 
+  "multcomp", "nlme", "plyr", "pROC", "purrr", "pwr", "readr", 
+  "scatterplot3d", "psych", "TeachingDemos", "tibble", "tidyr","nortest", "dplyr", "MASS", "WRS2")
+
+install_if_missing <- function(p) {
+  if (!require(p, character.only = TRUE)) {
+    install.packages(p, repos = "http://cran.us.r-project.org")
+    library(p, character.only = TRUE)
+  }
+}
+invisible(sapply(paquetes, install_if_missing))
+library(conflicted)
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::pmap())
+conflicts_prefer(dplyr::summarise())
+```
+
+## Pregunta 1  
+## Propongan una pregunta de investigación original, que involucre la comparación de la frecuencia en que se observa un evento o característica en dos grupos independientes (más abajo se dan unos ejemplos). Fijando una semilla propia, seleccionen una muestra aleatoria de hogares (100 < n < 150) y respondan la pregunta propuesta utilizando una prueba de permutaciones Monte Carlo. Deben reportar un intervalo de confianza para el estadístico utilizado usando las mismas remuestras.
+
+### Pregunta propuesta  
+**¿Existe una diferencia significativa en la proporción de tenencia de vivienda propia entre las personas que tienen educación superior y aquellas que tienen educación media?**
+
+Esta pregunta compara la frecuencia de un evento (poseer vivienda propia) entre dos grupos independientes (hogares cuyo representante tiene educación superior vs. hogares cuyo representante tiene educación media), utilizando datos de la encuesta CASEN 2017.
+
+#### ¿Qué debemos determinar o resolver?
+
+Debemos determinar si la proporción de hogares con vivienda propia (pagada o pagándose) difiere significativamente entre personas con educación superior y personas con educación media. Para ello, utilizaremos una prueba de permutaciones Monte Carlo, que no requiere supuestos distribucionales sobre los datos. Además, reportaremos un intervalo de confianza del 95% para la diferencia de proporciones observada, construido a partir de las mismas remuestras.
+
+#### Para ello comenzamos filtrando los datos de interés cargando solo los datos necesarios para nuestra pregunta de investigación. Seleccionamos un registro por hogar (usando `id.vivienda`), clasificamos el nivel educacional en dos grupos (educación media y educación superior) y creamos la variable binaria de tenencia de vivienda propia.
+
+```{r}
+# Carga de datos
+datos <- read.csv("EP08 Datos CASEN 2017.csv", stringsAsFactors = TRUE)
+
+# Seleccionamos un registro por hogar (el primero de cada id.vivienda)
+hogares <- datos |>
+  group_by(id.vivienda) |>
+  slice(1) |>
+  ungroup()
+
+# Definimos los niveles de educación para cada grupo
+educ_superior <- c("Técnico Nivel Superior Completo", "Técnico Nivel Superior Incompleta",
+                   "Profesional Completo", "Profesional Incompleto",
+                   "Postgrado Completo", "Postgrado Incompleto")
+
+educ_media <- c("M. Hum. Completa", "M. Hum. Incompleta",
+                "M. Téc Completa", "M. Téc. Prof. Incompleta")
+
+# Filtramos hogares con educación media o superior y creamos las variables
+hogares_educ <- hogares |>
+  filter(educ %in% c(educ_superior, educ_media)) |>
+  mutate(
+    nivel_educ = ifelse(educ %in% educ_superior, "Superior", "Media"),
+    vivienda_propia = ifelse(
+      v9 %in% c("Propio pagado", "Propio pagándose"),
+      "Propia",
+      "No propia"
+    )
+  )
+
+table(hogares_educ$nivel_educ, hogares_educ$vivienda_propia)
+```
+
+#### Muestreo aleatorio
+
+Fijando la semilla en 347, extraemos una muestra aleatoria de 120 hogares (60 de cada grupo educacional) para mantener un diseño balanceado con $100 < n < 150$.
+
+```{r}
+set.seed(347)
+
+# Muestreamos 60 hogares de cada grupo
+muestra_media <- hogares_educ |>
+  filter(nivel_educ == "Media") |>
+  slice_sample(n = 60, replace = FALSE)
+
+muestra_superior <- hogares_educ |>
+  filter(nivel_educ == "Superior") |>
+  slice_sample(n = 60, replace = FALSE)
+
+# Unimos las muestras
+muestra <- bind_rows(muestra_media, muestra_superior)
+nrow(muestra)
+
+# Tabla de contingencia de la muestra
+table(muestra$nivel_educ, muestra$vivienda_propia)
+```
+
+#### Hipótesis
+
+Planteamos las hipótesis en términos de proporciones poblacionales:
+
+- Hipótesis Nula ($H_0$): La proporción de hogares con vivienda propia es igual entre personas con educación media y personas con educación superior ($p_{Media} = p_{Superior}$).
+- Hipótesis Alternativa ($H_A$): La proporción de hogares con vivienda propia es diferente entre personas con educación media y personas con educación superior ($p_{Media} \neq p_{Superior}$).
+
+Usaremos un nivel de significancia $\alpha = 0.05$.
+
+#### Estadístico observado
+
+Utilizaremos como estadístico de prueba la diferencia de proporciones de vivienda propia entre ambos grupos: $\hat{p}_{Media} - \hat{p}_{Superior}$.
+
+```{r}
+# Proporciones observadas
+prop_media <- mean(muestra_media$vivienda_propia == "Propia")
+prop_superior <- mean(muestra_superior$vivienda_propia == "Propia")
+prop_media
+prop_superior
+
+# Diferencia observada
+diff_obs <- prop_media - prop_superior
+diff_obs
+```
+
+#### Prueba de Monte Carlo
+
+Bajo $H_0$, el nivel educacional no tiene relación con la tenencia de vivienda propia, de modo que las etiquetas de grupo son intercambiables. Realizamos $R = 5999$ permutaciones aleatorias de las etiquetas de grupo, recalculando la diferencia de proporciones en cada una. Esto genera la distribución nula del estadístico.
+
+Verificamos las condiciones para la prueba:  
+1. Las observaciones son independientes entre sí: Se cumple, ya que son hogares distintos elegidos al azar.
+2. La variable de respuesta es categórica binaria: Se cumple, ya que la variables vivienda propia es de la forma "Sí/No".
+3. Se comparan dos grupos independientes: Se cumple, ya que el nivel educacional divide a la muestra en dos categorías mutuamente excluyentes (educación media y educación superior), por lo que un hogar no puede pertenecer a ambos grupos a la vez.
+
+```{r}
+set.seed(347)
+R <- 5999
+
+# Vector de respuestas binarias (1 = Propia, 0 = No propia)
+respuesta <- ifelse(muestra$vivienda_propia == "Propia", 1, 0)
+grupo_original <- muestra$nivel_educ
+
+# Permutaciones Monte Carlo
+distribucion_nula <- replicate(R, {
+  grupo_perm <- sample(grupo_original)
+  prop_med_perm <- mean(respuesta[grupo_perm == "Media"])
+  prop_sup_perm <- mean(respuesta[grupo_perm == "Superior"])
+  prop_med_perm - prop_sup_perm
+})
+
+# Incluimos el estadístico observado en la distribución (R+1 valores)
+distribucion_completa <- c(distribucion_nula, diff_obs)
+
+# Valor p bilateral
+p_valor <- sum(abs(distribucion_completa) >= abs(diff_obs)) / (R + 1)
+p_valor
+```
+
+#### Intervalo de confianza del 95% para la diferencia de proporciones
+
+Para construir el intervalo de confianza utilizamos **bootstrapping** (remuestreo con reemplazo), ya que este método estima la variabilidad del estadístico a partir de los datos observados, sin asumir la hipótesis nula. A diferencia de las permutaciones (que simulan un mundo donde no hay diferencia entre grupos), el bootstrap refleja la incertidumbre real de nuestra estimación.
+
+```{r}
+set.seed(347)
+
+# Función para calcular la diferencia de proporciones en cada remuestra
+boot_diff_prop <- function(data, indices) {
+  d <- data[indices, ]
+  p_med <- mean(d$vivienda_propia[d$nivel_educ == "Media"] == "Propia")
+  p_sup <- mean(d$vivienda_propia[d$nivel_educ == "Superior"] == "Propia")
+  p_med - p_sup
+}
+
+# Bootstrap con R = 5999 remuestras con reemplazo
+resultado_boot <- boot(muestra, boot_diff_prop, R = 5999)
+
+# Intervalo de confianza del 95% (método percentil)
+ic_boot <- boot.ci(resultado_boot, conf = 0.95, type = "perc")
+ic_boot
+```
+
+### Conclusión:
+
+Se realizó una prueba de permutaciones Monte Carlo con $R = 5999$ permutaciones para comparar la proporción de hogares con vivienda propia entre personas con educación media y personas con educación superior, utilizando una muestra aleatoria de 120 hogares (60 por grupo) de la encuesta CASEN 2017. La proporción observada de vivienda propia fue de 0.5833 para educación media y de 0.5667 para educación superior, arrojando una diferencia observada de 0.0167. La prueba de permutaciones Monte Carlo produjo un valor $p = 1$. Como este valor es mayor al nivel de significancia $\alpha = 0.05$, no rechazamos la hipótesis nula. Para estimar la incertidumbre de la diferencia observada, se construyó un intervalo de confianza del 95% mediante bootstrapping (remuestreo con reemplazo, $R = 5999$), utilizando el método percentil, el cual resultó ser [-0.1602, 0.1909]. Este intervalo incluye el cero, lo que es consistente con no rechazar la hipótesis nula. En conclusión, no existe evidencia estadística suficiente para afirmar que la proporción de tenencia de vivienda propia difiere significativamente entre las personas que tienen educación superior y aquellas que tienen educación media.
+
+## Pregunta 2
+## Propongan una pregunta de investigación original, que involucre la comparación de las medias de más de dos grupos independientes (más abajo se dan unos ejemplos). Fijando una semilla distinta a la anterior, seleccionen una muestra aleatoria de hogares (200 < n < 300) y respondan la pregunta propuesta utilizando bootstrapping. Solo por ejercicio académico, aplique un análisis post-hoc con bootstrapping aunque este no fuera necesario. Indicación: consideren que el análisis post-hoc debe hacerse con las mismas remuestras usadas para la prueba ómnibus.
+
+### Pregunta propuesta  
+**¿Difiere el ingreso per cápita promedio del hogar (ytotcorh / numper) de las personas del área de "Ingeniería y Profesiones Afines" (e7.subarea), según se desempeñen como "Empleado u obrero de empresas públicas", "Empleado u obrero del sector privado" o "Empleado u obrero del sector público (Gobierno Central o Mun" (o15)?**
+
+#### **(El nombre completo del último grupo es "Empleado u obrero del sector público (Gobierno Central o Municipal)", pero en el archivo sale cortado. aclaramos que es el mismo grupo)**
+
+#### ¿Qué debemos determinar o resolver?
+Debemos determinar si existen diferencias significativas en el ingreso per cápita promedio del hogar entre profesionales de "Ingeniería y profesiones afines", dependiendo si su ocupación pertenece al sector privado, de empresas públicas o sector público (Gobierno Central o Municipalidad).
+
+#### Para ello comenzamos filtrando la base de datos para seleccionar los datos de interés para responder la pregunta y eliminar el resto, para luego extraer una muestra aleatoria de 250 hogares con sólo la información necesaria.
+
+```{r}
+datos <- read.csv("EP08 Datos CASEN 2017.csv", sep=",")
+# Filtramos por los datos relevantes para la pregunta
+grupos_interes <- c("Empleado u obrero de empresas públicas",
+                    "Empleado u obrero del sector privado",
+                    "Empleado u obrero del sector público (Gobierno Central o Mun")
+
+datos_interes <- datos |> filter(e7.subarea == "Ingeniería y Profesiones Afines",
+                                 o15 %in% grupos_interes) |> mutate(
+                                   ingreso_percap = ytotcorh / numper) |> filter(
+                                     !is.na(ingreso_percap)) |> select(
+                                       o15, ingreso_percap) |> mutate(o15 = factor(o15)
+                                     )
+
+# Selección de semilla
+set.seed(444)
+muestra <- datos_interes |> sample_n(250)
+table(muestra$o15)
+str(muestra)
+```
+
+#### Hipótesis  
+- Hipótesis Nula ($H_0$): El ingreso per cápita promedio del hogar es igual en los tres sectores ocupacionales para los profesionales de ingeniería  
+($\mu_{empresa pública} = \mu_{privado} = \mu_{público}$).  
+
+- Hipótesis alternativa ($H_A$): Al menos uno de los sectores ocupacionales presenta un ingreso per cápita promedio del hogar distinto de los demás.
+
+#### Condiciones para el Bootstrapping de una vía:  
+1. La variable independiente es categórica con tres niveles independientes y la variable dependiente es continua: se cumple, se comparan tres sectores ocupacionales independientes respecto al ingreso per cápita  
+2. Las observaciones son independientes entre sí: se cumple, la encuesta CASEN está estructurada de tal forma que se encuestan hogares de forma aleatoria y sin necesariamente una conexión entre sí. La muestra extraída se hace en forma aleatoria también, con una semilla definida para poder ser reproducida.  
+3. Tamaño muestral adecuado: se cumple, el tamaño total de la muestra, de $n = 250$, es suficiente para modelar empíricamente la variabilidad poblacional mediante muestreo.
+
+### A continuación, se procede con la prueba ómnibus aplicando bootstrapping
+
+```{r}
+# Semilla para garantizar reproducibilidad
+set.seed(444)
+
+# Como el enunciado requiere comparar medias, usaremos la función t1waybt del paquete WRS2.
+# Definimos el parámetro tr = 0 (gamma) para que la función calcule medias no truncadas, 
+# tal como se solicitó (o bien podría ser 0.2 para medias truncadas si consideramos asimetría).
+gamma <- 0.2
+nboot <- 999
+alfa <- 0.05
+
+prueba_omnibus_bt <- t1waybt(ingreso_percap ~ o15, data = muestra, tr = gamma, nboot = nboot)
+
+cat("Análisis de una vía para muestras independientes (bootstrapped)\n")
+cat("-------------------------------------------------------------\n")
+print(prueba_omnibus_bt)
+```
+
+### (Post-hoc)
+
+```{r}
+# Como se solicitó por ejercicio académico, realizamos el post-hoc
+set.seed(444) # Misma semilla para usar las mismas remuestras
+prueba_posthoc_bt <- mcppb20(ingreso_percap ~ o15, data = muestra, tr = gamma, nboot = nboot)
+
+cat("\nAnálisis post-hoc para muestras independientes (bootstrapped)\n")
+cat("-------------------------------------------------------------\n")
+print(prueba_posthoc_bt)
+```
+
+### Conclusión: 
+Tras aplicar la prueba ómnibus robusta con remuestreo (bootstrapping), obtuvimos un valor $p$ de $0.838$. 
+Dado que este valor es considerablemente mayor a nuestro nivel de significación ($\alpha = 0.05$), no contamos con evidencia estadística suficiente para rechazar la Hipótesis Nula ($H_0$).
+En términos prácticos, esto significa que no existen diferencias estadísticamente significativas en el ingreso per cápita promedio del hogar entre los profesionales de Ingeniería, independientemente de si se desempeñan en el sector privado, en empresas públicas o en el gobierno central/municipal. 

@@ -1,0 +1,309 @@
+---
+title: "EP11: Herramientas avanzadas para modelos de regresión"
+author: "Equipo 1"
+date: "2026-08-10"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(car)
+library(leaps)
+library(caret)
+library(pROC)
+library(ggfortify)
+
+```
+
+<br>
+---
+<br>
+
+#### **1. Definir la semilla a utilizar, que corresponde a los primeros cinco dígitos del RUN del integrante de mayor edad del equipo.**
+
+```{r}
+# Los primeros 5 dígitos del RUN del integrante de mayor edad del equipo son 20807, por lo que se define la semilla 20807
+
+set.seed(20807)
+```
+
+<br>
+
+---
+
+<br>
+
+#### **2. Seleccionar una muestra de 100 personas, asegurando que la mitad tenga estado nutricional "sobrepeso" y la otra mitad "no sobrepeso".**
+
+```{r}
+datos <- read.csv2("EP09 Datos.csv")
+
+# Se crea la variable IMC (pasando la estatura de cm a m) y, a partir de ella, la
+# variable dicotómica de estado nutricional EN usando el umbral 23.2 kg/m^2.
+datos <- datos |>
+  mutate(
+    IMC = Weight / (Height / 100)**2,
+    EN  = factor(ifelse(IMC >= 23.2, "sobrepeso", "no_sobrepeso"), levels = c("no_sobrepeso", "sobrepeso"))
+  )
+
+# Se toman 50 casos de cada grupo y se mezcla la muestra resultante.
+datos_sobrepeso    <- datos |> filter(EN == "sobrepeso")
+datos_no_sobrepeso <- datos |> filter(EN == "no_sobrepeso")
+set.seed(20807)
+muestra <- bind_rows(
+  datos_sobrepeso    |> slice_sample(n = 50),
+  datos_no_sobrepeso |> slice_sample(n = 50)
+) |>
+  slice_sample(prop = 1)
+
+table(muestra$EN)
+```
+
+Se obtuvo una muestra de 100 personas perfectamente balanceada: 50 casos con estado nutricional "sobrepeso" y 50 con "no sobrepeso". Esta muestra se usará como base para todos los modelos de los puntos siguientes.
+
+<br>
+
+---
+
+<br>
+
+#### **3. Usando las herramientas del paquete `leaps`, realizar una búsqueda exhaustiva para seleccionar entre dos y ocho predictores que ayuden a estimar la variable Peso (Weight), obviamente sin considerar las nuevas variables IMC ni EN, y luego utilizar las funciones del paquete `caret` para construir un modelo de regresión lineal múltiple con los predictores escogidos y evaluarlo usando bootstrapping.**
+
+```{r}
+# --- Selección de predictores: búsqueda exhaustiva
+
+# Predictores candidatos: todas las columnas salvo la respuesta (Weight) y las variables creadas en el punto 2 (IMC y EN).
+predictores <- setdiff(colnames(muestra), c("Weight", "IMC", "EN"))
+fmla_completa <- as.formula(paste("Weight", paste(predictores, collapse = " + "), sep = " ~ "))
+
+# Búsqueda exhaustiva: mejor subconjunto de cada tamaño, hasta 8 predictores.
+combinaciones <- regsubsets(fmla_completa, data = muestra, nbest = 1, nvmax = 8, method = "exhaustive")
+resumen <- summary(combinaciones)
+
+# Graficar (mejores combinaciones arriba; tono más oscuro = menor BIC).
+plot(combinaciones)
+```
+
+```{r}
+# ENTRE 2 Y 8 predictores: se busca el óptimo dentro de ese rango.
+rango <- 2:8
+i_bic <- rango[which.min(resumen[["bic"]][rango])]
+i_r2a <- rango[which.max(resumen[["adjr2"]][rango])]
+
+# Extraer las variables del mejor subconjunto según cada criterio.
+sel_bic <- names(which(resumen[["which"]][i_bic, ]))
+sel_r2a <- names(which(resumen[["which"]][i_r2a, ]))
+sel_bic <- sel_bic[sel_bic != "(Intercept)"]
+sel_r2a <- sel_r2a[sel_r2a != "(Intercept)"]
+
+cat("Mejor subconjunto por BIC:        ", paste(sel_bic, collapse = ", "), "\n")
+cat("Mejor subconjunto por R2 ajustado:", paste(sel_r2a, collapse = ", "), "\n")
+```
+
+```{r}
+# --- Modelo final y evaluación con bootstrapping (999 remuestreos) ---
+fmla_sel <- as.formula(paste("Weight", paste(sel_bic, collapse = " + "), sep = " ~ "))
+
+modelo_rlm <- train(fmla_sel, data = muestra, method = "lm", trControl = trainControl(method = "boot", number = 999))
+print(modelo_rlm)
+```
+
+El modelo de RLM sobre las 8 variables seleccionadas: Chest.Girth, Waist.Girth, Hip.Girth, Forearm.Girth, Knee.Girth, Calf.Maximum.Girth, Age, Height. Alcanza, por bootstrapping de 999 remuestreos, un $R^2 = 0.973$ y un RMSE de $2.17$ kg, lo que indica un ajuste muy bueno.
+
+Ahora verificamos las condiciones:
+
+```{r}
+# --- Confiabilidad del modelo:
+modelo_lm <- lm(fmla_sel, data = muestra)
+# Linealidad de cada predictor + no aditividad de Tukey
+residualPlots(modelo_lm)
+```
+
+```{r}
+# Normalidad de los residuos (Q-Q + Shapiro-Wilk, visto en RLS)
+shapiro.test(resid(modelo_lm))
+```
+```{r}
+# Homocedasticidad
+ncvTest(modelo_lm)
+```
+```{r}
+# Independencia de los residuos
+durbinWatsonTest(modelo_lm)
+```
+```{r}
+# Multicolinealidad (con predictores numéricos, vif() entrega VIF directo)
+vif(modelo_lm)
+```
+```{r}
+# (9) Observaciones influyentes
+influencePlot(modelo_lm)
+```
+
+
+Respecto de las condiciones: los residuos son normales (Shapiro-Wilk, p = 0.6964) y homocedásticos (ncvTest, p = 0.17335). La prueba de Durbin-Watson queda en el límite (p = 0.04), por lo que la independencia de los residuos debe tomarse con cautela. En cuanto a linealidad, residualPlots() detecta curvatura significativa en Chest.Girth, Hip.Girth y Height (Tukey en el borde, p = 0.051): es el principal riesgo del modelo. 
+
+Hay multicolinealidad moderada entre las circunferencias del tronco y las piernas (VIF de Chest.Girth = 7.3; Waist.Girth = 5.9; Forearm.Girth = 5.4; Knee.Girth = 5.1, todos en la banda 5–10, ninguno severo >10), lo que no daña la predicción pero sí la interpretación individual de esos coeficientes.
+
+Finalmente, influencePlot() marca algunos puntos de alto apalancamiento, pero ninguno supera el umbral de distancia de Cook, de modo que no hay observaciones influyentes que distorsionen las estimaciones.
+
+<br>
+
+---
+
+<br>
+
+#### **4. Haciendo un poco de investigación sobre el paquete `caret`, en particular cómo hacer Recursive Feature Elimination (RFE), construir un modelo de regresión lineal múltiple para predecir la variable IMC que incluya entre 10 y 20 predictores, seleccionando el conjunto de variables que maximice $R^2$ y que use cinco repeticiones de validación cruzada de cinco pliegues para evitar el sobreajuste (obviamente no se debe considerar las variables Peso, Estatura ni estado nutricional –Weight, Height, EN respectivamente).**
+
+```{r}
+set.seed(20807)
+# Predictores candidatos: se excluyen la respuesta (IMC) y las variables prohibidas por el enunciado (Weight, Height, EN).
+predictores_imc <- setdiff(colnames(muestra), c("Weight", "Height", "EN", "IMC"))
+
+x_imc <- muestra[, predictores_imc]
+y_imc <- muestra[["IMC"]]
+
+# RFE con lmFuncs, maximizando R2, usando 5 repeticiones de validación cruzada de 5 pliegues.
+control_rfe_imc <- rfeControl(functions = lmFuncs, method = "repeatedcv",
+                              number = 5, repeats = 5)
+rfe_imc <- rfe(x_imc, y_imc, sizes = 10:20, rfeControl = control_rfe_imc, metric = "Rsquared")
+rfe_imc
+```
+
+```{r, fig.width = 6, fig.height = 4}
+# Evolución del R2 según la cantidad de predictores.
+ggplot(rfe_imc, metric = "Rsquared") + theme_pubr()
+
+# Predictores del modelo seleccionado.
+predictors(rfe_imc)
+```
+
+```{r}
+# Ajustar el modelo final de RLM con los predictores seleccionados por RFE.
+fmla_imc <- as.formula(paste("IMC ~", paste(predictors(rfe_imc), collapse = " + ")))
+modelo_imc <- lm(fmla_imc, data = muestra)
+cat("R2 ajustado del modelo final:", round(summary(modelo_imc)$adj.r.squared, 3), "\n")
+cat("N° de predictores:", length(predictors(rfe_imc)), "\n")
+```
+
+```{r}
+#Por ultimo, las condiciones
+residualPlots(modelo_imc)         # linealidad
+```
+```{r}
+shapiro.test(resid(modelo_imc))   # normalidad
+```
+```{r}
+ncvTest(modelo_imc)               #  homocedasticidad
+```
+```{r}
+durbinWatsonTest(modelo_imc)      #  independencia
+```
+```{r}
+vif(modelo_imc)                   #  multicolinealidad
+```
+```{r}
+influencePlot(modelo_imc)         # casos influyentes
+```
+
+RFE con 5×5 validación cruzada selecciona 18 predictores, con un $R^2$ validado de 0.793 y un RMSE de 1.57 kg/m2 ($R^2$ ajustado del ajuste final = 0.854). Sin embargo, la verificación de condiciones revela varios riesgos que se deben declarar:
+la prueba de homocedasticidad es significativa (ncvTest, p = 0.014), es decir, la varianza de los residuos no es constante, y hay multicolinealidad severa (4 predictores con VIF > 10 y 13 con VIF > 5). Además, con 18 predictores para 100 observaciones se obtienen apenas 5.6 casos por predictor, muy por debajo de la regla de 10–15, lo que sobredimensiona el modelo. Los residuos sí son normales (Shapiro-Wilk, p = 0.41) e independientes (Durbin-Watson, p = 0.44). En suma, es un modelo con buen ajuste aparente pero poco confiable en sus supuestos y poco parsimonioso: usable para predecir con precaución, pero no para interpretar coeficientes.
+
+* Además,tener en cuenta que residualPlots() detecta curvatura significativa (Tukey p=0.011), por lo que la condición de linealidad tampoco se cumple del todo. Se reafirma el hecho de predecir con cautela.
+
+<br>
+
+---
+
+<br>
+
+#### **5. Usando RFE, construir un modelo de regresión logística múltiple para la variable EN que incluya el conjunto de predictores, entre dos y seis, que entregue la mejor curva ROC y que utilice validación cruzada dejando uno fuera para evitar el sobreajuste (obviamente no se debe considerar las variables Peso, Estatura –Weight y Height respectivamente– ni IMC).**
+
+```{r}
+# Candidatos: se excluyen la respuesta (EN) y las prohibidas (Weight, Height, IMC).
+predictores_en <- setdiff(colnames(muestra), c("Weight", "Height", "IMC", "EN"))
+x_en <- muestra[, predictores_en]
+y_en <- muestra[["EN"]]
+
+# Funciones de RLog de caret, con twoClassSummary para que la métrica sea el AUC.
+lrFuncs_roc <- lrFuncs
+lrFuncs_roc$summary <- twoClassSummary
+
+# RFE con validación cruzada dejando uno fuera (LOOCV), buscando entre 2 y 6 predictores.
+set.seed(20807)
+control_rfe_en <- rfeControl(functions = lrFuncs_roc, method = "LOOCV")
+rfe_en <- rfe(x_en, y_en, sizes = 2:6, rfeControl = control_rfe_en, metric = "ROC")
+rfe_en
+predictors(rfe_en)
+```
+
+```{r}
+# Predictores seleccionados y ajuste del modelo logístico final.
+fmla_en <- as.formula(paste("EN ~", paste(predictors(rfe_en), collapse = " + ")))
+modelo_en <- glm(fmla_en, family = binomial(link = "logit"), data = muestra)
+print(summary(modelo_en))
+```
+
+```{r}
+# --- Curva ROC y AUC en entrenamiento
+probs_en <- fitted(modelo_en)
+ROC_en <- roc(muestra[["EN"]], probs_en,
+              levels = c("no_sobrepeso", "sobrepeso"), direction = "<")
+cat("AUC entrenamiento:", round(ROC_en[["auc"]], 3), "\n")
+```
+
+```{r}
+# --- Matriz de confusión con umbral 0.5
+preds_en <- factor(ifelse(probs_en >= 0.5, "sobrepeso", "no_sobrepeso"),
+                   levels = c("no_sobrepeso", "sobrepeso"))
+mat_conf <- confusionMatrix(preds_en, muestra[["EN"]], positive = "sobrepeso")
+print(mat_conf[["table"]])
+```
+```{r}
+residualPlots(modelo_en, fitted = FALSE)# linealidad
+durbinWatsonTest(modelo_en) #independencia
+vif(modelo_en)                # multicolinealidad
+influencePlot(modelo_en)      # casos influyentes
+```
+
+RFE con LOOCV optimizando el AUC selecciona 5 predictores, con un AUC validado de 0.922. El modelo logístico final converge sin problemas de separación; sus residuos son independientes (Durbin-Watson, p = 0.434), lineales (todas las pruebas de curvatura no significativas) y no presenta multicolinealidad (VIF todos < 3.2). influencePlot() marca algunos puntos de alto apalancamiento, pero ninguno supera el umbral de distancia de Cook. Con 20 observaciones por predictor se cumple el criterio de tamaño muestral. Es, por tanto, un clasificador confiable y de buen poder predictivo en datos no vistos.
+
+<br>
+
+---
+
+<br>
+
+#### **6. Pronunciarse sobre la confiabilidad y el poder predictivo de los modelos obtenidos.**
+
+```{r}
+# Resumen del poder predictivo estimado por remuestreo para cada modelo.
+cat("Modelo de Peso (RLM, bootstrapping):\n")
+cat("  R2 =", round(modelo_rlm$results$Rsquared, 3),
+    "| RMSE =", round(modelo_rlm$results$RMSE, 3), "kg\n\n")
+
+cat("Modelo de IMC (RLM, RFE 5x5 CV):\n")
+mejor_imc <- rfe_imc$results[rfe_imc$results$Variables == rfe_imc$optsize, ]
+cat("  R2 =", round(mejor_imc$Rsquared, 3),
+    "| RMSE =", round(mejor_imc$RMSE, 3), "kg/m^2 |",
+    rfe_imc$optsize, "predictores\n\n")
+
+cat("Modelo de EN (RLog, RFE LOOCV):\n")
+mejor_en <- rfe_en$results[rfe_en$results$Variables == rfe_en$optsize, ]
+cat("  AUC =", round(mejor_en$ROC, 3),
+    "| Sensibilidad =", round(mejor_en$Sens, 3),
+    "| Especificidad =", round(mejor_en$Spec, 3), "\n")
+```
+
+**Modelo de Peso (RLM con bootstrapping).** Es el más confiable y potente de los tres. Con 8 predictores explica cerca del 97% de la variabilidad del peso y comete un error típico de solo 2.17 kg estimado por bootstrapping (una técnica robusta que no depende de una única partición). Cumple normalidad
+(Shapiro p=0.70) y homocedasticidad. Su única debilidad es la multicolinealidad moderada (VIF de 5-7). Como predictor de peso, es plenamente utilizable.
+
+**Modelo de IMC (RLM con RFE).** Tiene un poder predictivo bueno pero claramente menor: explica alrededor del 79.3% de la variabilidad del IMC con un RMSE de 1.572 kg/m2. Es el más débil en supuestos: heterocedasticidad significativa, multicolinealidad severa (varios VIF>10) y solo 5.6 obs/predictor. Defendible para predecir, pero sobredimensionado.
+
+**Modelo de EN (RLog con RFE).** Como clasificador es muy bueno: un AUC validado por LOOCV de 0.922, con sensibilidad y especificidad cercanas a 0.85, indican que discrimina correctamente entre "sobrepeso" y "no sobrepeso" en datos no vistos. El modelo final de 5 predictores es parsimonioso, converge sin problemas y no presenta multicolinealidad (VIF < 3.2). La advertencia conceptual es que EN se deriva del tamaño corporal, por lo que predecirlo a partir de circunferencias y diámetros roza la separación perfecta; aun así, la evaluación con LOOCV respalda su confiabilidad y poder predictivo.
+
+En conjunto, los tres modelos generalizan bien según sus respectivas técnicas de remuestreo. El de peso es el más sólido, el de IMC es potente pero poco parsimonioso, y el de estado nutricional logra una clasificación de alta calidad con muy pocos predictores.

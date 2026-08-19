@@ -1,0 +1,220 @@
+---
+title: "Ep-06"
+author: "Equipo 3"
+date: "2026-05-08"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+paquetes <- c("boot", "caret", "ggfortify", "ggplot2", 
+  "ggpubr", "grid", "gridExtra", "gmodels", "ez", "emmeans", "infer", 
+  "kableExtra", "Hmisc", "knitr", "leaps", "lmtest", "lsmeans", 
+  "multcomp", "nlme", "plyr", "pROC", "purrr", "pwr", "readr", 
+  "scatterplot3d", "psych", "TeachingDemos", "tibble", "tidyr","nortest", "dplyr", "MASS")
+
+install_if_missing <- function(p) {
+  if (!require(p, character.only = TRUE)) {
+    install.packages(p)
+    library(p, character.only = TRUE)
+  }
+}
+invisible(sapply(paquetes, install_if_missing))
+library(conflicted)
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::pmap())
+conflicts_prefer(dplyr::summarise())
+```
+
+# Contexto: 
+### En forma similar a la actividad anterior, recordemos que la prueba T de Student permite comparar dos mediciones pareadas de una variable aleatoria, que usualmente provienen de un mismo grupo de individuos u objetos. Ahora estamos conociendo que el análisis de varianza (ANOVA) nos permite comparar más de dos mediciones pareadas. Recordemos que esta prueba está compuesta de una etapa ómnibus, más un análisis post-hoc si corresponde. Este ejercicio apunta a que practiquemos este procedimiento.
+
+# Equipo 3:
+### 1. En este momento, los investigadores buscan determinar si existen diferencias en el tiempo que tardan los usuarios en formular consultas para problemas con diferente nivel de dificultad en el área de química.
+¿Qué debemos determinar o resolver ?
+Debemos determinar si existen diferencias en el tiempo que tardan los usuarios en formular consultas para problemas con diferente nivel de dificultad.
+
+Para ello se comienza con el análisis
+Primero filtramos los datos por el área "Química" y analizamos el impacto de la dificultad (Baja, Media, Alta) en el tiempo, considerando que cada participante pasa por los tres niveles.
+
+```{r}
+# Carga y filtrado de datos
+datos <- read.csv("EP06 Datos.csv", stringsAsFactors = TRUE)
+
+# Filtramos solo el área de Química
+datos_quimica <- datos %>% filter(area == "Química")
+```
+
+Ahora planteamos las hipótesis:
+
+Hipótesis Nula (H0): No existen diferencias significativas en el tiempo promedio que tardan los usuarios en formular consultas para los diferentes niveles de dificultad en el área de química ($\mu_{baja} = \mu_{media} = \mu_{alta}$).
+Hipótesis Alternativa (H_A): Al menos uno de los tiempos promedio de formulación de consultas es diferente para algún nivel de dificultad en el área de química.
+
+Antes de proceder, verificamos las condiciones para aplicar un ANOVA de muestras correlacionadas:
+
+Variable Independiente: Categórica con niveles vinculados (mismos sujetos evalúan las distintas dificultades).
+
+Variable Dependiente: Escala de intervalo o razón (Tiempo en segundos).
+
+Normalidad: Los datos deben seguir una distribución normal.
+
+Esfericidad: Las varianzas de las diferencias entre todos los pares de niveles deben ser iguales (Prueba de Mauchly).
+
+```{r}
+# Nos aseguramos de que los tipos de datos sean correctos para ANOVA
+datos_quimica$dificultad <- factor(datos_quimica$dificultad, levels = c("Baja", "Media", "Alta"))
+datos_quimica$id <- factor(datos_quimica$id)
+
+# Verificación mediante gráfico
+boxplot(tiempo ~ dificultad, data = datos_quimica, 
+        main = "Distribución del tiempo por dificultad (Química)",
+        ylab = "Tiempo (segundos)", xlab = "Dificultad")
+
+# Evaluamos la normalidad para cada grupo de dificultad
+shapiro_resultados <- datos_quimica %>%
+  group_by(dificultad) %>%
+  summarise(p_value = shapiro.test(tiempo)$p.value)
+
+shapiro_resultados
+
+# Ahora si el p-value > 0.05 en todos los grupos, se asume normalidad.  
+
+``` 
+Prueba Ómnibus y Esfericidad:  
+Para verificar el supuesto de esfericidad, se revisará la prueba de Mauchly incluida en los resultados de ezANOVA.  
+Si el p-valor de Mauchly es $> 0.05$, se asume esfericidad y leemos los resultados estándar.  
+Si es $< 0.05$, el supuesto no se cumple y debemos leer los resultados aplicando la corrección de Greenhouse-Geisser (p[GG]).
+
+```{r}
+anova_resultado <- ezANOVA(
+  data = datos_quimica,
+  dv = tiempo,
+  wid = id,
+  within = dificultad,
+  return_aov = TRUE
+)
+anova_resultado
+```
+
+Análisis Post-Hoc:
+Corresponde aplicar un análisis post-hoc si el resultado del ANOVA es significativo ($p < 0.05$), para determinar exactamente entre qué niveles de dificultad radican las diferencias.  
+```{r}
+post_hoc <- pairwise.t.test(
+  x = datos_quimica$tiempo, 
+  g = datos_quimica$dificultad, 
+  p.adjust.method = "holm", 
+  paired = TRUE
+)
+post_hoc
+```
+#### Respuesta: 
+El análisis ANOVA detectó una diferencia entre alguna de las medias con un valor p = 7.38e-09, por lo que podemos afirmar que si existen diferencias en el tiempo que tardan los usuarios en formular consultas para problemas con diferente nivel de dificultad en el área de química. Posteriormente, el análisis post-hoc determinó que las diferencias significativas radican específicamente al comparar la dificultad Baja con la Media y la dificultad Baja con la Alta, por lo que concluímos que la dificultad Baja presenta una diferencia en el tiempo respecto de las otras dos dificultades.
+
+### 2. Propongan una pregunta de investigación relacionada a la influencia de distintas metodologías de desarrollo de software que necesite ser analizado por medio de un procedimiento ANOVA para muestras correlacionadas con un factor que tenga entre 4 y 6 niveles. Luego invente una población para cada grupo con 5.000 datos, asegurando que cumpla las suposiciones de esta prueba.
+
+**Pregunta de investigación propuesta:**
+¿Existen diferencias significativas en el tiempo (en horas) que tardan los mismos equipos de desarrollo en implementar un módulo de software estandarizado (como un CRUD para una API REST con persistencia en base de datos) al transicionar y aplicar 5 metodologías o marcos de trabajo distintos?
+
+**Definición del diseño experimental:**
+Para que corresponda a un ANOVA de muestras correlacionadas (medidas repetidas), los mismos sujetos (en este caso, los equipos de desarrollo) deben pasar por todos los niveles del factor.
+
+* **Sujetos:** Equipos de desarrollo de software.
+* **Variable Independiente (Factor de medidas repetidas):** Metodología de desarrollo de software. Contará con **5 niveles**: Cascada, Scrum, Kanban, Extreme Programming (XP) y Lean.
+* **Variable Dependiente:** Tiempo de implementación (en horas).
+
+**Hipótesis:**
+* **Hipótesis Nula ($H_0$):** No existen diferencias en el tiempo promedio de implementación entre las distintas metodologías de desarrollo ($\mu_{Cascada} = \mu_{Scrum} = \mu_{Kanban} = \mu_{XP} = \mu_{Lean}$).
+* **Hipótesis Alternativa ($H_A$):** Al menos una de las metodologías de desarrollo presenta un tiempo promedio de implementación distinto a las demás para estos equipos.
+
+**Generación de la Población (Simulación de Datos):**
+Para crear una población de 5.000 equipos, aseguraremos que la variable dependiente (tiempo en horas) provenga de una distribución normal para cada grupo. Además, configuraremos la matriz de correlación para que las diferencias entre las varianzas cumplan el supuesto de esfericidad (condición necesaria para este ANOVA).
+
+```{r}
+# Semilla para reproducibilidad
+set.seed(42)
+
+# Definir el número de sujetos (5000 equipos)
+n_equipos <- 5000
+niveles <- 5
+
+limite_inferior <- 90
+limite_superior <- 160
+
+# Generación de medias aleatorias
+medias <- runif(n = niveles, min = limite_inferior, max = limite_superior)
+
+# Asignación a variables individuales para resolver el conflicto
+mu_cascada <- medias[1]
+mu_scrum   <- medias[2]
+mu_kanban  <- medias[3]
+mu_xp      <- medias[4]
+mu_lean    <- medias[5]
+
+# Verificación de las medias generadas aleatoriamente
+print("Medias asignadas a cada metodología (en horas):")
+print(setNames(medias, c("Cascada", "Scrum", "Kanban", "XP", "Lean")))
+
+# Generamos los datos asumiendo una distribución normal para cada nivel.
+# Para simplificar la generación de muestras correlacionadas que cumplan esfericidad,
+# creamos un "efecto de equipo" base y le sumamos el efecto de la metodología
+# con un ruido aleatorio normal.
+
+efecto_equipo <- rnorm(n_equipos, mean = 0, sd = 15)
+
+tiempo_cascada <- mu_cascada + efecto_equipo + rnorm(n_equipos, mean = 0, sd = 10)
+tiempo_scrum   <- mu_scrum   + efecto_equipo + rnorm(n_equipos, mean = 0, sd = 10)
+tiempo_kanban  <- mu_kanban  + efecto_equipo + rnorm(n_equipos, mean = 0, sd = 10)
+tiempo_xp      <- mu_xp      + efecto_equipo + rnorm(n_equipos, mean = 0, sd = 10)
+tiempo_lean    <- mu_lean    + efecto_equipo + rnorm(n_equipos, mean = 0, sd = 10)
+
+# Armamos el dataframe en formato ancho y luego lo pasamos a formato largo
+datos_poblacion_ancha <- data.frame(
+  id_equipo = factor(1:n_equipos),
+  Cascada = tiempo_cascada,
+  Scrum = tiempo_scrum,
+  Kanban = tiempo_kanban,
+  XP = tiempo_xp,
+  Lean = tiempo_lean
+)
+
+datos_poblacion <- datos_poblacion_ancha %>%
+  pivot_longer(
+    cols = c(Cascada, Scrum, Kanban, XP, Lean),
+    names_to = "metodologia",
+    values_to = "tiempo"
+  ) %>%
+  mutate(metodologia = factor(metodologia, levels = c("Cascada", "Scrum", "Kanban", "XP", "Lean")))
+
+# Verificación rápida de los datos generados
+head(datos_poblacion)
+summary(datos_poblacion)
+
+# Ejecución del ANOVA de medidas repetidas
+anova_metodologias <- ezANOVA(
+  data = datos_poblacion,
+  dv = tiempo,
+  wid = id_equipo,
+  within = metodologia
+)
+
+# Visualización de los resultados
+print(anova_metodologias)
+
+# Ejecución del análisis post-hoc con ajuste de Holm
+post_hoc_metodologias <- pairwise.t.test(
+  x = datos_poblacion$tiempo,
+  g = datos_poblacion$metodologia,
+  p.adjust.method = "holm",
+  paired = TRUE
+)
+
+# Visualización de la matriz de comparaciones
+print(post_hoc_metodologias)
+```
+#### Respuesta: Respuesta:
+
+El análisis ANOVA arrojó un resultado significativo, justificando la ejecución de un análisis post-hoc. Este procedimiento reveló diferencias estadísticamente significativas en los tiempos medios de todas las comparaciones posibles entre las metodologías.
+
+Esta significancia generalizada se explica por el masivo tamaño de la muestra (N = 5000), el cual otorga un poder estadístico tan elevado que permite a la prueba detectar cualquier mínima variación matemática. En conclusión, existe evidencia suficiente para afirmar que todas las metodologías presentan tiempos de desarrollo distintos.

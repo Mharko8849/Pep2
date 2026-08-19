@@ -1,0 +1,295 @@
+---
+title: "Ep-07"
+author: "Equipo 3"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+# knitr::opts_chunk$set(echo = TRUE)
+paquetes <- c("boot", "car", "caret", "ggfortify", "ggplot2", 
+  "ggpubr", "grid", "gridExtra", "gmodels", "ez", "emmeans", "infer", 
+  "kableExtra", "Hmisc", "knitr", "leaps", "lmtest", "lsmeans", 
+  "multcomp", "nlme", "plyr", "pROC", "purrr", "pwr", "readr", 
+  "scatterplot3d", "psych", "TeachingDemos", "tibble", "tidyr","nortest", "dplyr", "MASS")
+
+install_if_missing <- function(p) {
+  if (!require(p, character.only = TRUE)) {
+    install.packages(p)
+    library(p, character.only = TRUE)
+  }
+}
+invisible(sapply(paquetes, install_if_missing))
+library(conflicted)
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::pmap())
+conflicts_prefer(dplyr::summarise())
+```
+
+# Equipo 3:
+### 1.Observando los datos, la memorista sospecha que hay diferencias significativas en el tiempo de ejecución entre las versiones A y C del algoritmo cuando las instancias tienen 60 o más nodos. ¿Los datos respaldan la intuición de la memorista? Para responder, filtren los datos para tener las instancias con 60 o más nodos y seleccionen las columnas de los tiempos de ejecución de las versiones A y C en formato ancho. Usando como semilla el valor 73, obtenga muestras aleatorias independientes de 24 tiempos registrados por la versión A y 20 tiempos registrados por la versión C del algoritmo. Realicen un análisis estadístico pertinente (enunciar hipótesis, revisar condiciones, seleccionar pruebas ómnibus y post-hoc según corresponda) para responder la pregunta planteada, utilizando pruebas no paramétricas de ser necesario.
+
+¿Qué debemos determinar o resolver?
+
+Debemos determinar si existen diferencias significativas en los tiempos de ejecución entre la versión A y la versión C del algoritmo, evaluando exclusivamente aquellas instancias que cuenten con 60 o más nodos, a través de muestras independientes.  Para ello comenzamos con la preparación de los datos:Filtramos los datos para instancias de $\ge$ 60 nodos y, fijando la semilla en 73, extraemos las muestras aleatorias independientes (24 para A y 20 para C).
+
+```{r}
+# Carga de datos
+datos <- read.csv("EP07 Datos.csv", stringsAsFactors = TRUE)
+
+# Filtrado por instancias con 60 o más nodos (usando el nombre correcto: n.nodos)
+datos_filtrados <- datos %>% filter(n.nodos >= 60)
+
+# Fijamos la semilla para reproducibilidad
+set.seed(73)
+
+# Extracción de muestras aleatorias independientes (usando tiempo.A y tiempo.C)
+muestra_A <- sample(datos_filtrados$tiempo.A, size = 24, replace = FALSE)
+muestra_C <- sample(datos_filtrados$tiempo.C, size = 20, replace = FALSE)
+```
+Ahora planteamos las hipótesis:
+Considerando la naturaleza de los tiempos de ejecución de algoritmos (donde comúnmente se falla el supuesto de normalidad), formulamos las hipótesis en función de las medianas o distribuciones:
+
+- Hipótesis Nula ($H_0$): No hay diferencias significativas en los tiempos de ejecución entre la versión A y la versión C para instancias de 60 o más nodos.
+
+- Hipótesis Alternativa ($H_A$): Sí existen diferencias significativas en los tiempos de ejecución entre la versión A y la versión C para instancias de 60 o más nodos.
+
+Antes de proceder, verificamos las condiciones:
+
+- Muestras: Las muestras son aleatorias e independientes (condición dada por el enunciado).
+
+- Normalidad: Evaluaremos la normalidad de ambas muestras con la prueba de Shapiro-Wilk. Si al menos una no es normal ($p < 0.05$), recurriremos a pruebas no paramétricas.
+
+```{r}
+# Verificación de normalidad
+shapiro_A <- shapiro.test(muestra_A)
+shapiro_C <- shapiro.test(muestra_C)
+
+print(shapiro_A)
+print(shapiro_C)
+```
+
+Prueba Estadística:
+
+Dado el tamaño de la muestra y tratándose de tiempos de algoritmo, lo más seguro es aplicar la prueba no paramétrica para dos muestras independientes: Prueba de suma de rangos de Wilcoxon (Mann-Whitney U). Al ser solo dos grupos independientes, no se requiere prueba ómnibus (como Kruskal-Wallis) ni análisis post-hoc.
+
+
+```{r}
+# Ejecución de la prueba de Wilcoxon para muestras independientes
+prueba_wilcoxon <- wilcox.test(
+  x = muestra_A, 
+  y = muestra_C, 
+  alternative = "two.sided", 
+  paired = FALSE
+)
+
+print(prueba_wilcoxon)
+```
+#### Respuesta:
+Tras verificar los supuestos, la prueba de Shapiro-Wilk arrojó un valor $p = 0.01636$ para la muestra A y un valor $p = 0.6155$ para la muestra C. Dado que la muestra A no sigue una distribución normal ($p < 0.05$), utilizamos la prueba no paramétrica de Wilcoxon para muestras independientes.El análisis de Wilcoxon resultó en un estadístico $W = 260$ y un valor $p = 0.649$. Como el valor $p$ es mayor al nivel de significancia $0.05$, no rechazamos la hipótesis nula.En conclusión, los datos NO respaldan la intuición de la memorista. No existe evidencia estadística suficiente para afirmar que hay diferencias significativas en el tiempo de ejecución entre las versiones A y C del algoritmo cuando las instancias tienen 60 o más nodos.
+
+
+### 2. La memorista también sospecha que, al comparar las mismas instancias de iguales características, las mejores soluciones encontradas por las versiones A y B tienen rendimientos distintos. ¿Estará en lo cierto? Para responder, filtren los datos para tener las instancias con 60 o más nodos y seleccionen las columnas con el mejor rendimiento de las versiones A y B en formato ancho. Usando como semilla el valor 13, obtengan una muestra aleatoria de 22 instancias. Realicen un análisis estadístico pertinente (enunciar hipótesis, revisar condiciones, seleccionar pruebas ómnibus y post-hoc según corresponda) para responder la pregunta planteada, utilizando pruebas no paramétricas de ser necesario.
+¿Qué debemos determinar o resolver?
+Debemos determinar si existen diferencias significativas en el rendimiento de las mejores soluciones encontradas por la versión A y la versión B del algoritmo, evaluando exactamente las mismas instancias de prueba (muestras pareadas) que cuenten con 60 o más nodos.  
+
+Para ello comenzamos preparando los datos:
+```{r}
+# Filtrado por instancias con 60 o más nodos
+datos_filtrados_q2 <- datos |> filter(n.nodos >= 60)
+
+# Fijamos la semilla para reproducibilidad
+set.seed(13)
+
+# Extracción de la muestra aleatoria de 22 instancias
+muestra_q2 <- datos_filtrados_q2[sample(nrow(datos_filtrados_q2), 22), ]
+mejor_A <- muestra_q2$mejor.A
+mejor_B <- muestra_q2$mejor.B
+
+```
+Ahora planteamos las hipótesis:  
+Dado que estamos comparando el rendimiento de dos versiones sobre las mismas instancias, se trata de muestras pareadas.  
+- Hipótesis Nula ($H_0$): No existen diferencias significativas en el rendimiento de las mejores soluciones entre las versiones A y B para las mismas instancias ($\mu_{d} = 0$).  
+- Hipótesis Alternativa ($H_A$): Sí existen diferencias significativas en el rendimiento de las mejores soluciones entre las versiones A y B para las mismas instancias ($\mu_{d} \neq 0$).  
+Antes de proceder, verificamos las condiciones:  
+- Muestras pareadas: Las observaciones consisten en pares de mediciones sobre las mismas instancias, elegidas aleatoriamente de la población.  
+- Normalidad de las diferencias: Evaluaremos si las diferencias entre la versión A y la B siguen una distribución normal.
+
+```{r}
+# Cálculo de las diferencias
+diferencias_q2 <- mejor_A - mejor_B
+
+# Verificación de normalidad de las diferencias
+shapiro_diff <- shapiro.test(diferencias_q2)
+shapiro_diff
+```
+
+Prueba Estadística:  
+Como la prueba de Shapiro-Wilk arrojó un valor $p = 0.2198 (> 0.05)$, no se rechaza la hipótesis de normalidad de las diferencias. Por lo tanto, se cumplen los supuestos para utilizar una prueba paramétrica. Aplicaremos la Prueba T de Student para muestras pareadas. Al ser solo dos grupos, no requerimos de una prueba ómnibus ni de análisis post-hoc.
+
+```{r}
+# Ejecución de la prueba t para muestras pareadas
+prueba_t_pareada <- t.test(
+  x = mejor_A, 
+  y = mejor_B, 
+  alternative = "two.sided", 
+  paired = TRUE
+)
+
+prueba_t_pareada
+```
+#### Respuesta:
+El análisis estadístico, mediante la Prueba T de Student para muestras pareadas, arrojó un estadístico $t = 3.5517$ y un valor $p = 0.001887$. Dado que este valor $p$ es considerablemente menor al nivel de significancia 0.05, contamos con evidencia estadística suficiente para rechazar la hipótesis nula. Por lo tanto, podemos concluir que sí existen diferencias estadísticamente significativas en el rendimiento promedio de las mejores soluciones encontradas por las versiones A y B del algoritmo al evaluar exactamente las mismas instancias de prueba con 60 o más nodos. En consecuencia, los datos sí respaldan la intuición de la memorista de que ambas versiones presentan rendimientos distintos.
+
+
+### 3. La memorista sospecha que hay diferencias significativas en el tiempo de ejecución entre las versiones del algoritmo cuando las instancias de prueba tienen 50 o más nodos. ¿Los datos respaldan la intuición de la memorista? Para responder, filtren los datos para tener las instancias con 50 o más nodos y seleccionen las columnas con los tiempos de ejecución registrados (en formato ancho). Usando como semilla el valor 43, obtengan muestras aleatorias independientes de 15, 15 y 13 tiempos registrados por las versiones A, B y C, respectivamente. Realicen un análisis estadístico pertinente (enunciar hipótesis, revisar condiciones, seleccionar pruebas ómnibus y post-hoc según corresponda) para responder la pregunta planteada, utilizando pruebas no paramétricas de ser necesario.
+
+¿Qué debemos determinar o resolver?
+
+Debemos determinar si existen diferencias significativas en los tiempos promedio de ejecución entre las versiones A, B y C del algoritmo, evaluando instancias con 50 o más nodos, a partir de muestras independientes.  
+
+Para ello comenzamos preparando los datos:
+```{r}
+# Filtrado por instancias con 50 o más nodos
+datos_filtrados_q3 <- datos |> filter(n.nodos >= 50)
+
+# Fijamos la semilla para reproducibilidad
+set.seed(43)
+
+# Extracción de las muestras aleatorias independientes
+muestra_A_3 <- sample(datos_filtrados_q3$tiempo.A, size = 15, replace = FALSE)
+muestra_B_3 <- sample(datos_filtrados_q3$tiempo.B, size = 15, replace = FALSE)
+muestra_C_3 <- sample(datos_filtrados_q3$tiempo.C, size = 13, replace = FALSE)
+
+# Se preparan los datos en formato largo para el ANOVA y los supuestos
+datos_q3_largos <- data.frame(
+  tiempo = c(muestra_A_3, muestra_B_3, muestra_C_3),
+  version = factor(c(rep("A", 15), rep("B", 15), rep("C", 13)))
+)
+```
+
+Ahora planteamos las hipótesis para nuestra prueba ómnibus:  
+- Hipótesis Nula ($H_0$): El tiempo de ejecución promedio es igual para las tres versiones del algoritmo ($\mu_A = \mu_B = \mu_C$).  
+- Hipótesis Alternativa ($H_A$): El tiempo de ejecución promedio es diferente para al menos una de las versiones del algoritmo.  
+Antes de proceder, verificamos las condiciones:  
+- Muestras independientes: Las muestras son independientes y fueron elegidas aleatoriamente.  
+- Normalidad: Evaluar si los tiempos de ejecución en cada grupo siguen una distribución normal.  
+- Homocedasticidad: Evaluar si las varianzas de los grupos son similares.
+
+```{r}
+# Verificación de normalidad por grupo
+shapiro_A_3 <- shapiro.test(muestra_A_3)
+shapiro_B_3 <- shapiro.test(muestra_B_3)
+shapiro_C_3 <- shapiro.test(muestra_C_3)
+
+shapiro_A_3
+shapiro_B_3
+shapiro_C_3
+
+# Verificación de homocedasticidad 
+prueba_levene_3 <- leveneTest(tiempo ~ version, data = datos_q3_largos)
+prueba_levene_3
+```
+
+Prueba Estadística:  
+Al revisar los supuestos, notamos que la prueba de Shapiro-Wilk para la muestra A arrojó un valor $p = 0.0002399 < 0.05$, por lo que rechazamos la hipótesis de normalidad para dicho grupo. Dado que no se cumple este supuesto esencial en todas las muestras, debemos descartar el uso del ANOVA paramétrico. En su lugar, utilizaremos la prueba ómnibus no paramétrica de Kruskal-Wallis para muestras independientes.
+```{r}
+# Ejecución de la prueba ómnibus de Kruskal-Wallis
+prueba_kw <- kruskal.test(tiempo ~ version, data = datos_q3_largos)
+prueba_kw
+
+```
+
+Como el resultado de la prueba ómnibus de Kruskal-Wallis es significativo ($p = 0.0145 < 0.05$), se rechaza la hipótesis nula, lo que indica que al menos una de las versiones del algoritmo tiene un tiempo de ejecución distinto a las demás. Por lo tanto, se justifica realizar un análisis post-hoc para identificar entre qué pares de versiones específicos se encuentran estas diferencias.
+
+```{r}
+# Ejecución del análisis post-hoc con ajuste de Holm
+post_hoc_kw <- pairwise.wilcox.test(
+  x = datos_q3_largos$tiempo,
+  g = datos_q3_largos$version,
+  p.adjust.method = "holm",
+  paired = FALSE
+)
+
+post_hoc_kw
+```
+
+#### Respuesta:
+El análisis mediante la prueba ómnibus no paramétrica de Kruskal-Wallis arrojó un p-value = 0.0145. Como este valor es menor al nivel de significancia 0.05, rechazamos la hipótesis nula y afirmamos que existen diferencias estadísticamente significativas en el tiempo de ejecución promedio entre las versiones del algoritmo para instancias de 50 o más nodos.  
+Posteriormente, el análisis post-hoc determinó que estas diferencias significativas radican específicamente al comparar la versión A con la B (p = 0.03). Por el contrario, no se encontró evidencia de diferencias significativas entre las versiones A y C (p = 0.13) ni entre las versiones B y C (p = 0.13). En conclusión, los datos respaldan la intuición de la memorista de que existen diferencias en los tiempos de ejecución.
+
+### 4. La memorista también sospecha que, al comparar las mismas instancias con iguales características, las mejores soluciones encontradas por las diferentes versiones del algoritmo tienen rendimientos distintos. ¿Estará en lo cierto? Para responder, filtren los datos para tener las instancias con 50 o más nodos y seleccionen las columnas con los mejores rendimientos registrados. Usando como semilla el valor 16, obtengan una muestra aleatoria de 22 instancias. Realicen un análisis estadístico pertinente (enunciar hipótesis, revisar condiciones, seleccionar pruebas ómnibus y post-hoc según corresponda) para responder la pregunta planteada, utilizando pruebas no paramétricas de ser necesario.
+
+¿Qué debemos determinar o resolver?
+Debemos determinar si existen diferencias significativas en el rendimiento de las mejores soluciones encontradas por las diferentes versiones del algoritmo, evaluando las mismas instancias de prueba. Estaremos comparando el comportamiento de versiones sobre las mismas 22 instancias filtradas, por lo que nos encontramos ante muestras correlacionadas o de medidas repetidas de más de dos niveles.
+
+Preparamos los datos:
+
+```{r}
+datos_filtrados_q4 <- datos |> filter(n.nodos >= 50)
+# semilla
+set.seed(16)
+# muestreo de 22 instancias
+datos_muestra_q4 <- datos_filtrados_q4 |> slice_sample(n = 22, replace = FALSE)
+# Se preparan los datos en formato largo para el ANOVA y los supuestos
+datos_select_q4 <- datos_muestra_q4 |> select(instancia, mejor.A, mejor.B, mejor.C)
+# se transforma a formato largo
+datos_q4_largos <- datos_select_q4 |> pivot_longer(
+                    cols = c(mejor.A, mejor.B, mejor.C),
+                    names_to = "version",
+                    values_to = "rendimiento"
+                  )
+datos_q4_largos = datos_q4_largos |> mutate(instancia = factor(instancia))
+head(datos_q4_largos)
+```
+
+Planteamos las hipótesis para la prueba ómnibus:
+
+- Hipótesis Nula ($H_0$): No hay diferencias en el rendimiento medio de las mejores soluciones encontradas por las tres diferentes versiones del algoritmo ($\mu_A = \mu_B = \mu_C$). 
+
+- Hipótesis Alternativa ($H_A$): Al menos una de las versiones del algoritmo tiene un rendimiento medio distinto a las demas en estas instancias.
+
+Antes de proceder, verificamos las condiciones:  
+1- Escala de intervalos iguales para variable dependiente: rendimiento es una variable numérica continua, se cumple.
+2- Independencia de observaciones al interior de la muestra: las 22 instancias fueron extraídas de manera aleatoria con una semilla definida, así que se cumple.
+3- Distribución normal de las poblaciones: lo probaremos con shapiro.test.
+4- Esfericidad: se evaluará con prueba de Mauchly si se cumple la tercera condición.
+
+```{r}
+prueba_normalidad_q4 <- datos_q4_largos |>
+  group_by(version) |>
+  summarise(
+    estadistico_W = shapiro.test(rendimiento)$statistic,
+    valor_p = shapiro.test(rendimiento)$p.value
+  )
+
+prueba_normalidad_q4
+```
+
+Dado que el test Shapiro muestra un p-value inferior a 0.05 para todas las versiones del algoritmo, podemos rechazar la hipótesis nula del test y concluir que las distribuciones de los tres grupos no son normales.
+Al fallar el supuesto de normalidad, debemos optar por la prueba alternativa no paramétrica para más de dos muestras repetidas, la prueba de Friedman. Las hipótesis para la muestra son:
+
+- Hipótesis Nula ($H_0$): El rendimiento de las tres versiones del algoritmo proviene de poblaciones con distribuciones iguales
+
+- Hipótesis Alternativa ($H_A$): Al menos una de las versiones del algoritmo tiene una distribución de rendimiento distinta de la de otra versión.
+
+```{r}
+friedman <- friedman.test(rendimiento ~ version | instancia, data = datos_q4_largos)
+friedman
+```
+Con un p-value de 0.002, podemos rechazar la hipótesis nula y concluir que al menos una versión del algoritmo presenta una distribución de rendimiento distinta de otra. Para poder identificar en dónde está la diferencia, necesitamos hacer el procedimiento post-hoc.
+```{r}
+post_hoc_q4 <- pairwise.wilcox.test(
+  x = datos_q4_largos$rendimiento, 
+  g = datos_q4_largos$version, 
+  p.adjust.method = "holm", 
+  paired = TRUE,
+  exact = FALSE
+)
+post_hoc_q4
+```
+
+#### Respuesta:
+La sospecha de la memorista, quien pensaba que al comparar las mismas instancias con iguales características, las mejores soluciones encontradas por las diferentes versiones del algoritmo iban a tener rendimientos distintos, era correcta y la memorista estaba en lo cierto. La prueba ómnibus de Friedman utilizada para poder identificar la existencia o no de esta diferencia arrojó un p-value menor a 0.05, confirmando la sospecha. Concretamente, después de un procedimiento post-hoc, podemos afirmar que existe una diferencia en las distribución de rendimiento de la versión A del algoritmo con la versión B con un p-value de 0.0059. A su vez, no se encontró evidencia suficiente a través del análisis post-hoc para decir que los rendimientos de las versiones A y B tuvieran una diferencia significativa con la versión C, con p-values 0.0883 tanto para el par A-C como para el par B-C. 

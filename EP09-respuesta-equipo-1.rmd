@@ -1,0 +1,276 @@
+---
+title: "EP09"
+author: "Equipo 1"
+date: "2026-07-29"
+output: html_document
+---
+
+
+```{r setup, include=FALSE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(car)
+library(leaps)
+library(ggfortify)
+```
+
+<br>
+---
+<br>
+
+#### **1. Definir la semilla a utilizar, que corresponde a los últimos cuatro dígitos del RUN (sin considerar el dígito verificador) del integrante de menor edad del equipo.**
+
+```{r}
+# Los últimos 4 números de RUT del integrante de menor edad en el equipo es 5622, por lo que se define la semilla 5622
+
+set.seed(5622)
+
+```
+
+<br>
+
+---
+
+<br>
+
+#### **2. Seleccionar una muestra aleatoria de 100 mujeres (si la semilla es un número par) o 100 hombres (si la semilla es impar), y separar 70 casos para trabajar en la construcción de modelos y 30 para su evaluación en datos no vistos.**
+
+```{r}
+datos <- read.csv2("EP09 Datos.csv")
+
+datos_filtrados <- datos |>
+  filter(Gender == "0")
+
+muestra <- datos_filtrados |> slice_sample(n = 100)
+
+# Separamos los 70 casos para construir el modelo y 30 para evaluarlo
+indices_entrenamiento <- sample(1:100, 70)
+entrenamiento <- muestra[indices_entrenamiento, ]
+prueba <- muestra[-indices_entrenamiento, ]
+
+cat("Observaciones postfiltrado:", nrow(muestra), "\n")
+cat("Entrenamiento:", nrow(entrenamiento), " | Prueba:", nrow(prueba), "\n")
+```
+
+Se obtiene una muestra aleatoria de 100 mujeres desde las 260 disponibles y se divide en 70 casos de entrenamiento (variable entrenamiento) y 30 casos de prueba (variable prueba), que no se utilizarán en ninguna etapa de construcción de los modelos.
+
+<br>
+
+---
+
+<br>
+
+#### **3. Seleccionar de forma aleatoria ocho posibles variables predictoras.** 
+```{r}
+# Variables candidatas: se excluyen Peso (respuesta), Estatura (excluida por enunciado) y Género (constante dentro de la muestra, ya que se trabaja con un solo sexo)
+
+variables_candidatas <- setdiff(colnames(datos), c("Weight", "Height", "Gender"))
+
+
+predictores_azar <- sample(variables_candidatas, 8)
+predictores_azar
+
+```
+
+<br>
+
+---
+
+<br>
+
+#### **4. Seleccionar, de las otras variables, una que el equipo considere que podría ser útil para predecir la variable Peso (sin considerar la estatura), justificando bien esta selección.**  
+
+```{r}
+
+# Variables restantes (ni sorteadas, ni excluidas por enunciado)
+otras_variables <- setdiff(variables_candidatas, predictores_azar)
+otras_variables
+
+# Evaluamos correlación de cada una con Weight en el set de entrenamiento
+correlaciones <- sapply(entrenamiento[otras_variables], function(x) cor(x, entrenamiento$Weight))
+sort(correlaciones, decreasing = TRUE)
+
+```
+
+Considerando que de las 14 variables restantes que no fueron sorteadas en el punto anterior, ni excluidas por el enunciado y el cálculo de la correlación lineal de cada una con la variable "Weigth usando los 70 casos de la muestra de entrenamiento, se escogió la variable Thigh.Girth (Grosor promedio de ambos muslos). La razón de esto es que presentó la correlación más alta con un r=0.828.
+Esta elección se sustenta por este criterio estadístico. Por este motivo, se selecciona Thigh.Girth como el predictor a usar en el modelo de regresión lineal simple (RLS) del punto 5. Además, tiene sentido esta variable debido a que los muslos son una de las zonas más voluminosas del cuerpo humano, especialmente en mujeres, por lo que es de esperar de que refleja directamente el peso corporal.
+
+
+<br>
+
+---
+
+<br>
+
+#### **5. Usando el entorno R y paquetes estándares1, construir un modelo de regresión lineal simple con el predictor seleccionado en el paso anterior.**
+```{r}
+modelo_rls <- lm(Weight ~ Thigh.Girth, data = entrenamiento)
+summary(modelo_rls)
+```
+
+```{r}
+# Gráfico de dispersión con la recta de regresión ajustada
+ggplot(entrenamiento, aes(x = Thigh.Girth, y = Weight)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "steelblue") +
+  labs(title = "Relación entre Weight y Thigh.Girth",
+       x = "Grosor promedio de muslos (cm)",
+       y = "Peso (kg)") +
+  theme_minimal()
+```
+
+El modelo ajustado fue  $Weight = -25.67 + 1.4915 * Thigh.Girth$. El coeficiente de Thigh.Girth es significativo dado que $p < 2e-16$, esto nos indica que por cada centímetro adicional de grosor promedio de muslos, el peso esperado aumenta en 1.4915 kg
+.
+El modelo obtuvo un $R^2$ ajustado de 0.6814, esto nos indica que el promedio de los muslos explica aproximadamente un 68% de la variabilidad del peso en la muestra de entrenamiento. 
+El error estándar residual es de 4.786 kg, osea que da una idea de que la magnitud típica de error al predecir el peso con este modelo simple.
+Por último el gráfico de dispersión con la recta ajustada nos confirma visualmente una relación lineal fuerte y consistente entre ambas variables, sin una señal de curvatura evidente. 
+Con todos estos resultados, podemos rescatar que el predictor Thigh.Girth es un comienzo favorable para la extencion del modelo a una regresión lineal múltiple (RLM) en el siguiente paso.
+
+<br>
+
+---
+
+<br>
+
+#### **6. Usando herramientas estándares1 para la exploración de modelos del entorno R, buscar entre dos y cinco predictores de entre las variables seleccionadas al azar en el punto 3, para agregar al modelo de regresión lineal simple obtenido en el paso 5.**
+
+```{r}
+# Solo se pueden usar las 8 variables sorteadas en el paso 3, más Thigh.Girth (paso 5).
+variables_totales <- c("Thigh.Girth", predictores_azar)
+fmla_completo <- as.formula(paste("Weight ~", paste(variables_totales, collapse = " + ")))
+
+# Revisar las correlaciones entre los potenciales predictores para anticipar posibles problemas de multicolinealidad (condición 8 de la sección 14.5).
+print(round(cor(entrenamiento[variables_totales]), 3))
+
+# Evaluar todas las combinaciones, forzando la permanencia de Thigh.Girth y permitiendo agregar hasta cinco predictores adicionales
+combinaciones <- regsubsets(fmla_completo, data = entrenamiento, nbest = 1, nvmax = 6,
+                            force.in = "Thigh.Girth", method = "exhaustive")
+```
+
+```{r, fig.width = 6, fig.height = 4.5}
+# Cada fila es el mejor subconjunto de cada tamaño; las mejores combinaciones aparecen en la parte superior de la matriz.
+plot(combinaciones)
+```
+
+```{r}
+# Extraer el mejor subconjunto según el criterio BIC
+resumen_combinaciones <- summary(combinaciones)
+i_bic_minimo <- which.min(resumen_combinaciones[["bic"]])
+
+# Comparar las métricas de los mejores subconjuntos de cada tamaño
+print(data.frame(n_predictores = 2:6,
+                 R2_ajustado = round(resumen_combinaciones[["adjr2"]], 4),
+                 BIC = round(resumen_combinaciones[["bic"]], 2)))
+
+# Extraer las variables seleccionadas (se descarta el intercepto)
+mejor_comb_bic <- resumen_combinaciones[["which"]][i_bic_minimo, ]
+comb_mejor_bic <- names(mejor_comb_bic[mejor_comb_bic == TRUE])[-1]
+print(comb_mejor_bic)
+
+# Construir el modelo de RLM con los predictores seleccionados
+fmla_mejor_bic <- as.formula(paste("Weight", paste(comb_mejor_bic, collapse = " + "),
+                                   sep = " ~ "))
+modelo_rlm <- lm(fmla_mejor_bic, data = entrenamiento)
+print(summary(modelo_rlm))
+```
+
+Para buscar los predictores adicionales se utilizó la herramienta estándar de exploración de modelos `regsubsets()` del paquete `leaps`, mediante búsqueda exhaustiva de los mejores subconjuntos. Se forzó la permanencia de `Thigh.Girth` (el predictor del RLS del paso 5) y se permitió agregar hasta 5 predictores adicionales de entre los 8 sorteados en el punto 3.
+
+Comparando los modelos según el criterio BIC (que penaliza la complejidad y favorece modelos parsimoniosos), el mínimo se alcanza con un total de 5 predictores, esto es, `Thigh.Girth` más cuatro predictores adicionales: Chest.Girth, Calf.Maximum.Girth, Hip.Girth y Wrists.diameter. Si bien el modelo con 6 predictores tiene un $R^2$ ajustado marginalmente mayor (0.9245 frente a 0.9233), la mejora es mínima y el BIC lo penaliza, por lo que se escoge el modelo de 4 predictores adicionales por parsimonia.
+
+El modelo de regresión lineal múltiple resultante obtiene un $R^2$ ajustado de 0.923, superior al 0.681 del modelo simple del paso 5. Esto respeta la restricción del enunciado de agregar entre dos y cinco predictores. Cabe destacar que Thigh.Girth deja de ser significativo al incorporar los demás predictores (p=0,688), esto se analizará a continuación. 
+
+
+<br>
+
+---
+
+<br>
+
+#### **7. Evaluar la bondad de ajuste (incluyendo el análisis de casos atípicos y casos influyentes) y la generalidad (condiciones para RLM) de los modelos y “arreglarlos” en caso de que presenten algún problema.**
+
+```{r}
+# Bondad de ajuste: comparar los modelos jerárquicos obtenidos
+modelo_nulo <- lm(Weight ~ 1, data = entrenamiento)
+print(anova(modelo_nulo, modelo_rls, modelo_rlm))
+
+# Condiciones del modelo de RLS
+print(durbinWatsonTest(modelo_rls))
+print(ncvTest(modelo_rls))
+print(shapiro.test(resid(modelo_rls)))
+cat("Máxima distancia de Cook:", round(max(cooks.distance(modelo_rls)), 3), " | Umbral:", round(qf(0.5, 2, 68), 3), "\n")
+
+autoplot(modelo_rls, which = 1:4) + theme_minimal()
+```
+
+Diagnóstico del RLS: El modelo explica un 68,1% de la variabilidad del peso y la reducción respecto del modelo nulo es significativa (F(1, 68) = 617,3; p < 0,001). Los residuos son normales (p = 0,603) e independientes (p = 0,874), pero no homocedásticos (p = 0,001), y hay un caso con distancia de Cook de 1,613, muy sobre el umbral de 0,700. Se trata de la observación 80: una mujer con `Thigh.Girth` = 75,7 cm (el máximo de la muestra) y 73,2 kg, bastante menos de lo que predice el modelo. Ambos problemas apuntan al mismo caso.
+
+```{r}
+# ARREGLO: se elimina el único caso con influencia problemática. La decisión se basa en el análisis previo.
+entrenamiento_limpio <- entrenamiento[rownames(entrenamiento) != "80", ]
+modelo_rls_final <- lm(Weight ~ Thigh.Girth, data = entrenamiento_limpio)
+print(summary(modelo_rls_final))
+
+print(durbinWatsonTest(modelo_rls_final))
+print(ncvTest(modelo_rls_final))
+print(shapiro.test(resid(modelo_rls_final)))
+cat("Máxima distancia de Cook:", round(max(cooks.distance(modelo_rls_final)), 3), "\n")
+```
+
+Arreglo del RLS: Eliminado ese caso (1 de 70), el modelo cumple todas las condiciones: residuos normales (p = 0,668), homocedásticos (p = 0,200) e independientes (p = 0,792), con máxima distancia de Cook de 0,277. Además mejora el ajuste: el $R^2$ ajustado sube de 0,681 a 0,724 y el error estándar residual baja de 4,79 a 4,41 kg.
+
+```{r}
+# Se reajusta el RLM sin el caso influyente y se evalúa si todos sus predictores siguen aportando al ajuste.
+modelo_rlm_limpio <- lm(fmla_mejor_bic, data = entrenamiento_limpio)
+modelo_rlm_final <- update(modelo_rlm_limpio, . ~ . - Wrists.diameter)
+print(anova(modelo_rlm_final, modelo_rlm_limpio))
+print(summary(modelo_rlm_final))
+
+print(durbinWatsonTest(modelo_rlm_final))
+print(ncvTest(modelo_rlm_final))
+print(shapiro.test(resid(modelo_rlm_final)))
+cat("\nFactores de inflación de la varianza:\n"); print(round(vif(modelo_rlm_final), 3))
+cat("Máxima distancia de Cook:", round(max(cooks.distance(modelo_rlm_final)), 3), " | Umbral:", round(qf(0.5, 5, 64), 3), "\n")
+
+autoplot(modelo_rlm_final, which = 1:4) + theme_minimal()
+```
+
+Diagnóstico y arreglo del RLM: Al reajustar el modelo sin el caso influyente, `Wrists.diameter` deja de aportar al ajuste (F(1, 63) = 3,123; p = 0,082), por lo que se elimina por parsimonia. El modelo final, con cuatro predictores, cumple todas las condiciones: residuos normales (p = 0,316), homocedásticos (p = 0,430) e independientes (p = 0,376), sin patrones sistemáticos en los gráficos de residuos, y con máxima distancia de Cook de 0,218 frente a un umbral de 0,880. Consigue un $R^2$ ajustado de 0,920 y un error estándar residual de 2,37 kg, con 69 casos para 4 predictores (más de 17 por predictor).
+
+Hay que notar que `Thigh.Girth` y `Hip.Girth` presentan VIF cercanos a 6, dentro del rango donde la multicolinealidad es preocupante, porque ambas circunferencias miden esencialmente la misma región anatómica (r = 0,90). Por eso `Thigh.Girth` deja de ser significativo en presencia de `Hip.Girth` (p = 0,928). Se mantiene porque el enunciado pide extender el modelo de RLS del paso 5 y porque ningún VIF supera 10, asumiendo el riesgo de que sus coeficientes individuales no sean interpretables por separado.
+
+<br>
+
+---
+
+<br>
+
+#### **8. Evaluar el poder predictivo del modelo con los datos no utilizados para construirlo.**
+
+```{r}
+# Calcular el error cuadrático medio de cada modelo en entrenamiento y en los 30 casos no vistos
+rmse_rls_ent <- sqrt(mean(resid(modelo_rls_final)^2))
+rmse_rlm_ent <- sqrt(mean(resid(modelo_rlm_final)^2))
+
+error_rls <- prueba[["Weight"]] - predict(modelo_rls_final, prueba)
+error_rlm <- prueba[["Weight"]] - predict(modelo_rlm_final, prueba)
+rmse_rls_pru <- sqrt(mean(error_rls^2))
+rmse_rlm_pru <- sqrt(mean(error_rlm^2))
+
+cat("Modelo de RLS - RMSE entrenamiento:", round(rmse_rls_ent, 3),
+    " | RMSE prueba:", round(rmse_rls_pru, 3), "\n")
+cat("Modelo de RLM - RMSE entrenamiento:", round(rmse_rlm_ent, 3),
+    " | RMSE prueba:", round(rmse_rlm_pru, 3), "\n\n")
+
+cat("Aumento del error en datos no vistos (RLS):",
+    round(100 * (rmse_rls_pru / rmse_rls_ent - 1), 1), "%\n")
+cat("Aumento del error en datos no vistos (RLM):",
+    round(100 * (rmse_rlm_pru / rmse_rlm_ent - 1), 1), "%\n")
+```
+
+Evaluación del poder predictivo: El modelo de RLM predice claramente mejor en datos no vistos: su RMSE en el conjunto de prueba es de 3,328 kg frente a los 5,640 kg del modelo simple, es decir, un 41% menos de error. Considerando que los pesos del conjunto de prueba van de 47,6 a 81,8 kg, un error típico de 3,3 kg resulta razonable para la mayoría de los usos prácticos, mientras que los 5,6 kg del RLS ya son una imprecisión considerable.
+
+Ambos modelos muestran el deterioro esperable al pasar de entrenamiento a prueba: 29,8% en el RLS y 45,7% en el RLM. El aumento algo mayor del segundo es normal, ya que un modelo con más parámetros se ajusta un poco más al conjunto con que fue construido. Aun así, no hay señales de sobreajuste relevante: el RLM sigue prediciendo mejor que el RLS en datos no vistos por un margen amplio, y su RMSE de prueba se mantiene muy por debajo del RMSE de entrenamiento del modelo simple. Podemos concluir que el modelo múltiple generaliza bien y entrega buenas predicciones para casos que no se tuvieron a la vista durante su construcción.
